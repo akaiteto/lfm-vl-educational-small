@@ -62,7 +62,7 @@ def sample(patch_mult=16):
 
 
 def chat_tokens(n_img_tokens, answer):
-    """VLMに入れるトークン列を作る。
+    """図5-A・図7-A VLMに入れるトークン列を作る。
 
     形：<bos> <user> <image_start> <image>×n <image_end> describe the image <assistant> 答え <eos>
     <image> の位置には、あとで画像トークン（コネクタの出力）を差し込む。

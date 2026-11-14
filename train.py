@@ -34,6 +34,7 @@ def pad_batch(seqs, value):
 
 # ---------------------------------------------------------------------------
 def stage0_siglip(steps=300, bsz=16):
+    # 図7-B（このソースだけの段階）
     text = TextEncoder(cfg.text_enc, len(VOCAB))
     siglip = SigLIP(model.vision, text, cfg.vision.dim)
     opt = torch.optim.AdamW(siglip.parameters(), lr=3e-4)
@@ -73,6 +74,7 @@ def run_vlm(name, opt, steps, bsz=8):
 
 
 def stage1_connector(steps=200):
+    # 図7-C ①
     # エンコーダと言語モデルを止める（requires_grad=False で勾配を計算しない）
     for p in model.vision.parameters():
         p.requires_grad = False
@@ -84,6 +86,7 @@ def stage1_connector(steps=200):
 
 
 def stage2_all(steps=600, base_lr=3e-4):
+    # 図7-C ②
     for p in model.parameters():
         p.requires_grad = True
     # 公式 Stage2：言語モデル:コネクタ:エンコーダ = 5:5:1 の学習率の比（エンコーダは学習済みなので壊さないよう小さく）

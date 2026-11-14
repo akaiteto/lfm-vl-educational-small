@@ -1,5 +1,7 @@
 """LFM2.5-VL を学ぶための小さな実装。
 
+コメントの「図N-X」は、X記事「図形・GIFで分かりやすく勉強しようシリーズ：VLM(LFM2.5-VL)」の図の番号。
+
 全体の流れ（公式と同じ並び）：
   画像 → [1] ビジョンエンコーダ（SigLIP2 NaFlex風のViT）→ パッチごとのベクトル
        → [2] コネクタ（PixelUnshuffle → 2層MLP）→ 言語モデルと同じ次元の「画像トークン」
@@ -60,7 +62,7 @@ def rope(x, pos):
 # [1] ビジョンエンコーダ（SigLIP2 NaFlex風）
 # ---------------------------------------------------------------------------
 class ViTBlock(nn.Module):
-    """普通のTransformerブロック（LayerNorm → 自己アテンション → 残差 → LayerNorm → MLP → 残差）。
+    """図3-C 普通のTransformerブロック（LayerNorm → 自己アテンション → 残差 → LayerNorm → MLP → 残差）。
     画像側は因果マスクなし：どのパッチも全パッチを見られる。"""
 
     def __init__(self, dim, heads):
@@ -94,7 +96,7 @@ class VisionEncoder(nn.Module):
         self.ln_post = nn.LayerNorm(cfg.dim)
 
     def patchify(self, img):
-        """(3, H, W) → (gh*gw, 3*p*p)。左上から右へ、行ごとに並べる。"""
+        """図3-A パッチに切る。(3, H, W) → (gh*gw, 3*p*p)。左上から右へ、行ごとに並べる。"""
         p = self.cfg.patch
         c, h, w = img.shape
         gh, gw = h // p, w // p
@@ -107,13 +109,13 @@ class VisionEncoder(nn.Module):
         tokens, grids = [], []
         for img in images:
             x, gh, gw = self.patchify(img)
-            x = self.patch_embed(x)
-            # 基準グリッドの位置埋め込みを、この画像のパッチ数 gh×gw に補間する
+            x = self.patch_embed(x)                                        # 図3-A パッチごとにベクトルにする
+            # 図3-B 基準グリッドの位置埋め込みを、この画像のパッチ数 gh×gw に補間する
             pos = F.interpolate(self.pos, size=(gh, gw), mode="bilinear", align_corners=False)
             x = x + pos[0].permute(1, 2, 0).reshape(gh * gw, -1)
             tokens.append(x)
             grids.append((gh, gw))
-        # 長さの違うパッチ列を、詰め物（パディング）で同じ長さにそろえてまとめて計算する
+        # 図3-C 長さの違うパッチ列を、詰め物（パディング）で同じ長さにそろえてまとめて計算する
         n_max = max(t.shape[0] for t in tokens)
         feats = torch.zeros(len(tokens), n_max, self.cfg.dim)
         pad_mask = torch.ones(len(tokens), n_max, dtype=torch.bool)
@@ -147,7 +149,7 @@ class TextEncoder(nn.Module):
 
 
 class SigLIP(nn.Module):
-    """画像ベクトルと文ベクトルの内積で「この画像とこの文は対応しているか」を当てる。
+    """図7-B 画像ベクトルと文ベクトルの内積で「この画像とこの文は対応しているか」を当てる。
 
     CLIPとの違い：
       - CLIP：行ごとにソフトマックス（バッチ内の全ペアの中から正解の1つを選ぶ）
@@ -174,7 +176,7 @@ class SigLIP(nn.Module):
     def loss(self, images, ids, pad_mask):
         zi = self.embed_image(images)                                  # (B, D)
         zt = F.normalize(self.txt_proj(self.text(ids, pad_mask)), dim=-1)
-        logits = zi @ zt.T * self.t.exp() + self.b                     # (B, B) 全ペアの点数
+        logits = zi @ zt.T * self.t.exp() + self.b # 図7-B                    # (B, B) 全ペアの点数
         labels = 2 * torch.eye(len(zi)) - 1                            # 対角（正しいペア）=+1、それ以外=-1
         return -F.logsigmoid(labels * logits).sum() / len(zi)
 
@@ -183,7 +185,7 @@ class SigLIP(nn.Module):
 # [2] コネクタ（PixelUnshuffle → 2層MLP）
 # ---------------------------------------------------------------------------
 class Connector(nn.Module):
-    """ビジョンエンコーダの出力を、言語モデルの入力（画像トークン）に変える。
+    """図4-A・4-B ビジョンエンコーダの出力を、言語モデルの入力（画像トークン）に変える。
 
     1. PixelUnshuffle：隣り合う 2×2 パッチのベクトルを横につなげて1本にする。
        トークン数は1/4、1本の長さは4倍。情報は捨てずに、並べ方だけ変える。
@@ -199,7 +201,7 @@ class Connector(nn.Module):
         self.mlp = nn.Sequential(nn.LayerNorm(in_dim), nn.Linear(in_dim, cfg.hidden), nn.GELU(), nn.Linear(cfg.hidden, lm_dim))
 
     def pixel_unshuffle(self, x, gh, gw):
-        """x: (gh*gw, D) → ((gh/f)*(gw/f), D*f*f)"""
+        """図4-A x: (gh*gw, D) → ((gh/f)*(gw/f), D*f*f)"""
         f = self.f
         d = x.shape[-1]
         x = x.reshape(gh // f, f, gw // f, f, d).permute(0, 2, 1, 3, 4)
@@ -209,7 +211,7 @@ class Connector(nn.Module):
         out = []
         for i, (gh, gw) in enumerate(grids):
             x = feats[i, : gh * gw]                     # 詰め物を外す
-            out.append(self.mlp(self.pixel_unshuffle(x, gh, gw)))
+            out.append(self.mlp(self.pixel_unshuffle(x, gh, gw)))  # 図4-A → 図4-B
         return out                                       # 画像ごとに長さの違うリスト
 
 
@@ -217,7 +219,7 @@ class Connector(nn.Module):
 # [3] 言語モデル（LFM2：ゲート付き短い畳み込み ＋ GQA）
 # ---------------------------------------------------------------------------
 class ShortConv(nn.Module):
-    """ゲート付き短い畳み込み（LFM2の主役の演算子）。
+    """図5-B ゲート付き短い畳み込み（LFM2の主役の演算子）。
 
       B, C, h~ = Linear(x) を3つに分ける
       y = B ⊙ h~           （入力側のゲート）
@@ -245,7 +247,7 @@ class ShortConv(nn.Module):
 
 
 class GQA(nn.Module):
-    """グループ化クエリアテンション。クエリのヘッドはたくさん、キー・バリューのヘッドは少なく持ち、
+    """図5-C グループ化クエリアテンション。クエリのヘッドはたくさん、キー・バリューのヘッドは少なく持ち、
     複数のクエリヘッドで同じキー・バリューを共有する。推論時に保存するKVキャッシュが小さくなる。
     公式LFM2はRoPEとQK-Norm（QとKをRMSNormしてから内積）を使う。因果マスクつき。"""
 
@@ -272,7 +274,7 @@ class GQA(nn.Module):
 
 
 class LMBlock(nn.Module):
-    """前にRMSNorm（pre-norm）→ 演算子（畳み込み or GQA）→ 残差 → RMSNorm → SwiGLU → 残差。"""
+    """図5-D 前にRMSNorm（pre-norm）→ 演算子（畳み込み or GQA）→ 残差 → RMSNorm → SwiGLU → 残差。"""
 
     def __init__(self, kind, cfg):
         super().__init__()
@@ -297,7 +299,7 @@ class LFM2(nn.Module):
     def forward_embeds(self, x):
         for blk in self.blocks:
             x = blk(x)
-        return self.head(self.norm(x))                          # (B, T, vocab)
+        return self.head(self.norm(x))                          # 図6-A (B, T, vocab)
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +314,7 @@ class LFMVL(nn.Module):
         self.image_token_id = image_token_id
 
     def build_inputs(self, ids, images):
-        """文のトークンを埋め込みに変え、<image> の位置を画像トークンで置き換える。
+        """図5-A 文のトークンを埋め込みに変え、<image> の位置を画像トークンで置き換える。
         画像トークンも文のトークンも、ここから先は同じ1本の列として言語モデルに入る。"""
         x = self.lm.emb(ids)                                     # (B, T, D)
         feats, _, grids = self.vision(images)
@@ -328,13 +330,13 @@ class LFMVL(nn.Module):
         logits = self.lm.forward_embeds(self.build_inputs(ids, images))
         if labels is None:
             return logits
-        # 次のトークン予測：位置tの出力で、位置t+1のトークンを当てる
+        # 図7-A 次のトークン予測：位置tの出力で、位置t+1のトークンを当てる
         loss = F.cross_entropy(logits[:, :-1].reshape(-1, logits.shape[-1]), labels[:, 1:].reshape(-1), ignore_index=-100)
         return logits, loss
 
     @torch.no_grad()
     def generate(self, ids, images, eos_id, max_new=12):
-        """1トークンずつ足していく（貪欲法：一番確率の高いトークンを選ぶ）。
+        """図6-B 1トークンずつ足していく（貪欲法：一番確率の高いトークンを選ぶ）。
         公式の推論はKVキャッシュと畳み込みの状態を持ち回って速くするが、ここでは毎回全体を計算し直す。"""
         out = []
         for _ in range(max_new):
